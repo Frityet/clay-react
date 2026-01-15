@@ -12,12 +12,16 @@
 #include <string.h>
 #include <assert.h>
 
+#undef NULL
+#define NULL ((void *_Nullable)0)
+#pragma clang assume_nonnull begin
+
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
 
-CR_Runtime *cr_runtime = NULL;
-CR_TextInputState *_cr_focused_input = NULL;
+CR_Runtime *$nullable cr_runtime = NULL;
+CR_TextInputState *$nullable _cr_focused_input = NULL;
 
 static uint64_t _cr_next_context_id = 1;
 static uint64_t _cr_next_component_id = 1;
@@ -29,19 +33,19 @@ static uint64_t _cr_next_component_id = 1;
 struct CR_Component {
     const char *name;
     uint64_t id;
-    CR_Component *parent;
+    CR_Component *$nullable parent;
     CR_Component **children;
     size_t child_count;
     size_t child_capacity;
     size_t child_cursor;
     CR_Id key;
     bool keyed;
-    CR_Hook *hooks;
+    CR_Hook *$nullable hooks;
     size_t hook_count;
     size_t hook_capacity;
     size_t hook_cursor;
     uint64_t last_render_frame;
-    void *props_copy;
+    void *$nullable props_copy;
     size_t props_size;
 };
 
@@ -49,7 +53,7 @@ struct CR_Component {
 // MEMORY HELPERS
 // ============================================================================
 
-void *_cr_alloc(size_t size) {
+void * $nullable _cr_alloc(size_t size) {
     void *ptr = calloc(1, size);
     if (ptr && cr_runtime) {
         cr_runtime->allocated += size;
@@ -60,7 +64,7 @@ void *_cr_alloc(size_t size) {
     return ptr;
 }
 
-void _cr_free(void *ptr, size_t size) {
+void _cr_free(void * $nullable ptr, size_t size) {
     if (ptr) {
         if (cr_runtime) {
             cr_runtime->allocated -= size;
@@ -80,7 +84,7 @@ static void _cr_clear_temp_strings(void) {
     cr_runtime->temp_string_count = 0;
 }
 
-char *_cr_temp_string_alloc(size_t size) {
+char * $nullable _cr_temp_string_alloc(size_t size) {
     if (!cr_runtime) {
         cr_init();
     }
@@ -284,7 +288,7 @@ static void _cr_destroy_component(CR_Component *component) {
     }
 
     if (component->parent) {
-        _cr_component_remove_child(component->parent, component);
+        _cr_component_remove_child($cast_nonnull(component->parent), component);
     }
 
     for (size_t i = 0; i < component->hook_count; i++) {
@@ -309,7 +313,7 @@ static void _cr_destroy_component(CR_Component *component) {
     _cr_free(component, sizeof(*component));
 }
 
-static CR_Component *_cr_create_component(const char *name, CR_Component *parent, bool keyed, CR_Id key) {
+static CR_Component *$nullable _cr_create_component(const char *name, CR_Component *$nullable parent, bool keyed, CR_Id key) {
     CR_Component *component = _cr_alloc(sizeof(CR_Component));
     if (!component) return NULL;
     component->name = name;
@@ -351,7 +355,7 @@ static void _cr_move_child(CR_Component *parent, size_t from, size_t to) {
     parent->children[to] = child;
 }
 
-static CR_Component *_cr_find_child_by_key(CR_Component *parent, CR_Id key, const char *name, size_t index) {
+static CR_Component *$nullable _cr_find_child_by_key(CR_Component *parent, CR_Id key, const char *name, size_t index) {
     if (!parent || !name) return NULL;
     size_t target = index;
     if (target >= parent->child_count && parent->child_count > 0) {
@@ -373,7 +377,7 @@ static CR_Component *_cr_find_child_by_key(CR_Component *parent, CR_Id key, cons
     return NULL;
 }
 
-static CR_Component *_cr_get_child_by_index(CR_Component *parent, const char *name, size_t index) {
+static CR_Component *$nullable _cr_get_child_by_index(CR_Component *parent, const char *name, size_t index) {
     if (!parent || !name) return NULL;
     if (index >= parent->child_count) {
         return NULL;
@@ -519,7 +523,7 @@ void cr_shutdown(void) {
 
     // Destroy component tree
     if (cr_runtime->root) {
-        _cr_destroy_component(cr_runtime->root);
+        _cr_destroy_component($cast_nonnull(cr_runtime->root));
     }
 
     if (cr_runtime->components) {
@@ -561,8 +565,12 @@ void cr_begin_frame(void) {
 
 Clay_RenderCommandArray cr_end_frame(void) {
     Clay_RenderCommandArray commands = Clay_EndLayout();
-    _cr_flush_effect_queue(cr_runtime->pending_layout_effects, &cr_runtime->pending_layout_effect_count);
-    _cr_flush_effect_queue(cr_runtime->pending_effects, &cr_runtime->pending_effect_count);
+    if (cr_runtime->pending_layout_effects) {
+        _cr_flush_effect_queue($cast_nonnull(cr_runtime->pending_layout_effects), &cr_runtime->pending_layout_effect_count);
+    }
+    if (cr_runtime->pending_effects) {
+        _cr_flush_effect_queue($cast_nonnull(cr_runtime->pending_effects), &cr_runtime->pending_effect_count);
+    }
     _cr_collect_garbage();
     cr_runtime->is_rendering = false;
     return commands;
@@ -602,7 +610,7 @@ uint32_t _cr_next_uid(void) {
     return cr_runtime->next_uid++;
 }
 
-CR_Hook *_cr_use_hook(int type) {
+CR_Hook *$nullable _cr_use_hook(int type) {
     static bool warned = false;
 
     if (!cr_runtime) {
@@ -637,7 +645,7 @@ CR_Hook *_cr_use_hook(int type) {
     return hook;
 }
 
-bool _cr_deps_should_run(CR_Hook *hook, CR_DepList deps) {
+bool _cr_deps_should_run(CR_Hook *$nullable hook, CR_DepList deps) {
     if (!hook) return false;
 
     switch (deps.mode) {
@@ -668,17 +676,19 @@ bool _cr_deps_should_run(CR_Hook *hook, CR_DepList deps) {
     return true;
 }
 
-void _cr_deps_store(CR_Hook *hook, CR_DepList deps) {
+void _cr_deps_store(CR_Hook *$nullable hook, CR_DepList deps) {
     if (!hook) return;
 
+    const auto h = $cast_nonnull(hook);
+
     if (deps.mode != CR_DEPS_LIST || deps.count == 0) {
-        _cr_clear_deps(hook);
+        _cr_clear_deps(h);
         hook->deps_initialized = true;
         return;
     }
 
     if (hook->dep_count != deps.count) {
-        _cr_clear_deps(hook);
+        _cr_clear_deps(h);
         hook->deps = calloc(deps.count, sizeof(CR_DepSnapshot));
         hook->dep_count = deps.count;
     }
@@ -701,7 +711,7 @@ void _cr_deps_store(CR_Hook *hook, CR_DepList deps) {
     hook->deps_initialized = true;
 }
 
-void _cr_use_effect_impl(EffectBlock effect, CR_DepList deps, bool is_layout) {
+void _cr_use_effect_impl(EffectBlock $nullable effect, CR_DepList deps, bool is_layout) {
     if (!effect) return;
     CR_Hook *hook = _cr_use_hook(CR_HOOK_EFFECT);
     if (!hook) return;
@@ -729,7 +739,7 @@ void cr_key(CR_Id key) {
     cr_runtime->has_next_key = true;
 }
 
-void _cr_component_begin(const char *name, const void *props, size_t props_size) {
+void _cr_component_begin(const char *name, const void * $nullable props, size_t props_size) {
     if (!cr_runtime) {
         cr_init();
     }
@@ -765,7 +775,7 @@ void _cr_component_begin(const char *name, const void *props, size_t props_size)
             component = cr_runtime->root;
         } else {
             if (cr_runtime->root) {
-                _cr_destroy_component(cr_runtime->root);
+                _cr_destroy_component($cast_nonnull(cr_runtime->root));
             }
             component = _cr_create_component(name, NULL, false, (CR_Id){0});
             cr_runtime->root = component;
@@ -812,7 +822,7 @@ void _cr_component_end(void) {
         cr_runtime->component_stack[--cr_runtime->component_stack_count];
 }
 
-void *_cr_current_props(void) {
+void * $nullable _cr_current_props(void) {
     if (!cr_runtime || !cr_runtime->current_component) {
         return NULL;
     }
@@ -823,15 +833,16 @@ void *_cr_current_props(void) {
 // STATE IMPLEMENTATION
 // ============================================================================
 
-CR_StateInternal *_cr_alloc_state(size_t size, void *initial) {
+CR_StateInternal * $nullable _cr_alloc_state(size_t size, void *initial) {
     CR_StateInternal *state = _cr_alloc(sizeof(CR_StateInternal));
     if (!state) return NULL;
 
-    state->value = _cr_alloc(size);
-    if (!state->value) {
+    void *value = _cr_alloc(size);
+    if (!value) {
         _cr_free(state, sizeof(CR_StateInternal));
         return NULL;
     }
+    state->value = (void * $nonnull)value;
 
     memcpy(state->value, initial, size);
     state->size = size;
@@ -840,14 +851,24 @@ CR_StateInternal *_cr_alloc_state(size_t size, void *initial) {
     return state;
 }
 
-void *_cr_state_get(CR_StateInternal *state) {
-    return state ? state->value : NULL;
+void *$nullable _cr_state_get(CR_StateInternal *$nullable state) {
+    return state ? (void *)state->value : NULL;
 }
 
-void _cr_state_set(CR_StateInternal *state, void *value) {
+void _cr_state_set(CR_StateInternal * $nullable state, void * $nullable value) {
     if (!state || !value) return;
     memcpy(state->value, value, state->size);
     state->version++;
+}
+
+bool _cr_state_set_if_changed(CR_StateInternal * $nullable state, void * $nullable value) {
+    if (!state || !value) return false;
+    if (memcmp(state->value, value, state->size) == 0) {
+        return false;
+    }
+    memcpy(state->value, value, state->size);
+    state->version++;
+    return true;
 }
 
 // ============================================================================
@@ -875,15 +896,16 @@ void _cr_run_effect(CR_EffectInternal *effect) {
 // SIGNAL IMPLEMENTATION
 // ============================================================================
 
-CR_SignalInternal *_cr_alloc_signal(size_t size, void *initial, struct Type type) {
+CR_SignalInternal * $nullable _cr_alloc_signal(size_t size, void *initial, struct Type type) {
     CR_SignalInternal *signal = _cr_alloc(sizeof(CR_SignalInternal));
     if (!signal) return NULL;
 
-    signal->value = _cr_alloc(size);
-    if (!signal->value) {
+    void *value = _cr_alloc(size);
+    if (!value) {
         _cr_free(signal, sizeof(CR_SignalInternal));
         return NULL;
     }
+    signal->value = (void * $nonnull)value;
 
     memcpy(signal->value, initial, size);
     signal->size = size;
@@ -895,7 +917,7 @@ CR_SignalInternal *_cr_alloc_signal(size_t size, void *initial, struct Type type
     return signal;
 }
 
-void _cr_signal_notify(CR_SignalInternal *signal) {
+void _cr_signal_notify(CR_SignalInternal * $nullable signal) {
     if (!signal) return;
 
     for (size_t i = 0; i < signal->subscriber_count; i++) {
@@ -905,12 +927,23 @@ void _cr_signal_notify(CR_SignalInternal *signal) {
     }
 }
 
+bool _cr_signal_set_if_changed(CR_SignalInternal * $nullable signal, void * $nullable value) {
+    if (!signal || !value) return false;
+    if (memcmp(signal->value, value, signal->size) == 0) {
+        return false;
+    }
+    memcpy(signal->value, value, signal->size);
+    signal->version++;
+    _cr_signal_notify(signal);
+    return true;
+}
+
 // ============================================================================
 // EVENT HANDLING
 // ============================================================================
 
-void _cr_register_click(uint32_t element_id, VoidBlock handler) {
-    if (!cr_runtime) return;
+void _cr_register_click(uint32_t element_id, VoidBlock $nullable handler) {
+    if (!cr_runtime || !handler) return;
 
     // Grow array if needed
     if (cr_runtime->click_handler_count >= cr_runtime->click_handler_capacity) {
@@ -935,7 +968,9 @@ void _cr_dispatch_clicks(void) {
     for (int32_t i = 0; i < hovered.length; i++) {
         for (size_t j = 0; j < cr_runtime->click_handler_count; j++) {
             if (hovered.internalArray[i].id == cr_runtime->click_handlers[j].element_id) {
-                cr_runtime->click_handlers[j].handler();
+                if (cr_runtime->click_handlers[j].handler) {
+                    cr_runtime->click_handlers[j].handler();
+                }
                 return; // Only fire one handler per click
             }
         }
@@ -957,7 +992,7 @@ void _cr_clear_handlers(void) {
 // CONTEXT IMPLEMENTATION
 // ============================================================================
 
-CR_Context *_cr_create_context_impl(const char *name, size_t size, void *default_value, struct Type type) {
+CR_Context * $nullable _cr_create_context_impl(const char *name, size_t size, void * $nullable default_value, struct Type type) {
     CR_Context *ctx = calloc(1, sizeof(CR_Context));
     if (!ctx) return NULL;
 
@@ -976,7 +1011,7 @@ CR_Context *_cr_create_context_impl(const char *name, size_t size, void *default
     return ctx;
 }
 
-void *_cr_use_context_impl(CR_Context *context) {
+void * $nullable _cr_use_context_impl(CR_Context * $nullable context) {
     if (!context || !cr_runtime) return NULL;
 
     // Walk up the context stack to find a provider
@@ -992,7 +1027,7 @@ void *_cr_use_context_impl(CR_Context *context) {
     return context->default_value;
 }
 
-CR_ContextProvider *_cr_push_context(CR_Context *context, void *value) {
+CR_ContextProvider * $nullable _cr_push_context(CR_Context *context, void * $nullable value) {
     if (!cr_runtime) return NULL;
 
     CR_ContextProvider *provider = calloc(1, sizeof(CR_ContextProvider));
@@ -1007,7 +1042,7 @@ CR_ContextProvider *_cr_push_context(CR_Context *context, void *value) {
     return provider;
 }
 
-void _cr_pop_context(CR_ContextProvider *provider) {
+void _cr_pop_context(CR_ContextProvider * $nullable provider) {
     if (!provider || !cr_runtime) return;
 
     // Verify this is the top of the stack
@@ -1022,7 +1057,7 @@ void _cr_pop_context(CR_ContextProvider *provider) {
 // TEXT INPUT IMPLEMENTATION
 // ============================================================================
 
-CR_TextInputState *_cr_alloc_text_input(size_t buffer_size) {
+CR_TextInputState * $nullable _cr_alloc_text_input(size_t buffer_size) {
     CR_TextInputState *input = calloc(1, sizeof(CR_TextInputState));
     if (!input) return NULL;
 
@@ -1043,7 +1078,7 @@ CR_TextInputState *_cr_alloc_text_input(size_t buffer_size) {
     return input;
 }
 
-void _cr_text_input_set_text(CR_TextInputState *input, const char *text) {
+void _cr_text_input_set_text(CR_TextInputState * $nullable input, const char * $nullable text) {
     if (!input || !text) return;
 
     size_t len = strlen(text);
@@ -1051,19 +1086,28 @@ void _cr_text_input_set_text(CR_TextInputState *input, const char *text) {
         len = input->buffer_size - 1;
     }
 
-    memcpy(input->buffer, text, len);
-    input->buffer[len] = '\0';
-    input->length = len;
+    bool same_text = (len == input->length) &&
+        (memcmp(input->buffer, text, len) == 0);
+    bool cursor_changed = input->cursor_pos != len;
+    if (same_text && !cursor_changed) {
+        return;
+    }
+
+    if (!same_text) {
+        memcpy(input->buffer, text, len);
+        input->buffer[len] = '\0';
+        input->length = len;
+    }
     input->cursor_pos = len;
 
-    if (input->on_change) {
+    if (input->on_change && !same_text) {
         input->on_change(input->buffer);
     }
 
     _cr_schedule_render();
 }
 
-void _cr_text_input_insert(CR_TextInputState *input, const char *text) {
+void _cr_text_input_insert(CR_TextInputState * $nullable input, const char * $nullable text) {
     if (!input || !text) return;
 
     size_t insert_len = strlen(text);
@@ -1089,7 +1133,7 @@ void _cr_text_input_insert(CR_TextInputState *input, const char *text) {
     _cr_schedule_render();
 }
 
-void _cr_text_input_backspace(CR_TextInputState *input) {
+void _cr_text_input_backspace(CR_TextInputState * $nullable input) {
     if (!input || input->cursor_pos == 0) return;
 
     memmove(input->buffer + input->cursor_pos - 1,
@@ -1106,7 +1150,7 @@ void _cr_text_input_backspace(CR_TextInputState *input) {
     _cr_schedule_render();
 }
 
-void _cr_text_input_delete(CR_TextInputState *input) {
+void _cr_text_input_delete(CR_TextInputState * $nullable input) {
     if (!input || input->cursor_pos >= input->length) return;
 
     memmove(input->buffer + input->cursor_pos,
@@ -1122,18 +1166,26 @@ void _cr_text_input_delete(CR_TextInputState *input) {
     _cr_schedule_render();
 }
 
-void _cr_text_input_move_cursor(CR_TextInputState *input, int delta) {
+void _cr_text_input_move_cursor(CR_TextInputState * $nullable input, int delta) {
     if (!input) return;
 
     int new_pos = (int)input->cursor_pos + delta;
     if (new_pos < 0) new_pos = 0;
     if (new_pos > (int)input->length) new_pos = (int)input->length;
+    if ((size_t)new_pos == input->cursor_pos) {
+        return;
+    }
     input->cursor_pos = (size_t)new_pos;
 
     _cr_schedule_render();
 }
 
-void _cr_focus_input(CR_TextInputState *input, uint32_t element_id) {
+void _cr_focus_input(CR_TextInputState * $nullable input, uint32_t element_id) {
+    if (input && _cr_focused_input == input &&
+            input->focused && input->editing && input->element_id == element_id) {
+        return;
+    }
+
     // Unfocus previous
     if (_cr_focused_input && _cr_focused_input != input) {
         _cr_focused_input->focused = false;
@@ -1152,16 +1204,20 @@ void _cr_focus_input(CR_TextInputState *input, uint32_t element_id) {
 }
 
 void _cr_unfocus_input(void) {
-    if (_cr_focused_input) {
-        _cr_focused_input->focused = false;
-        _cr_focused_input->editing = false;
+    if (!_cr_focused_input) {
+        return;
     }
+    bool was_focused = _cr_focused_input->focused || _cr_focused_input->editing;
+    _cr_focused_input->focused = false;
+    _cr_focused_input->editing = false;
     _cr_focused_input = NULL;
 
-    _cr_schedule_render();
+    if (was_focused) {
+        _cr_schedule_render();
+    }
 }
 
-void _cr_handle_text_event(const char *text) {
+void _cr_handle_text_event(const char * $nullable text) {
     if (_cr_focused_input && text) {
         _cr_text_input_insert(_cr_focused_input, text);
     }
@@ -1206,3 +1262,5 @@ void cr_debug_log_tree(void) {
             cr_runtime ? (unsigned long long)cr_runtime->frame : 0,
             cr_runtime ? cr_runtime->click_handler_count : 0);
 }
+
+#pragma clang assume_nonnull end

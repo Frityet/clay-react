@@ -30,12 +30,13 @@
 
 #define $sized_by(field) sized_by_##field
 #define $serialise_as(name) serialise_as_##name
+#define $tagged_by(field) tagged_by_##field
+#define $tag_value(value) tag_value_##value
+#define $modifiers(...) __VA_ARGS__
 
 #define $field(ty, name, ...) \
-    union { \
-        typeof(ty) name; \
-        struct $_TAG_PASTE(name, __LINE__, ##__VA_ARGS__) { } $##name##$; \
-    }
+    typeof(ty) name; \
+    struct $_TAG_PASTE(name, __LINE__ __VA_OPT__(, ) __VA_ARGS__) { } $##name##$
 
 #if defined(__clang__)
 #   define $if_clang(...) __VA_ARGS__
@@ -97,6 +98,7 @@ struct Type {
         TypeType_STRUCT,
         TypeType_ARRAY,
         TypeType_POINTER,
+        TypeType_UNION,
     } type;
     enum TypeModifiers {
         TypeModifiers_NONE = 0 << 0,
@@ -116,6 +118,13 @@ struct Type {
         } structure;
 
         struct {
+            struct Buffer *name;
+
+            size_t field_count;
+            struct Field *$nullable fields;
+        } union_;
+
+        struct {
             size_t length;
             struct Type *type;
         } array;
@@ -128,7 +137,7 @@ struct Type {
 
 struct Field {
     struct Type type;
-    struct Buffer *name;
+    struct Buffer *$nullable name;
     struct Buffer *$nullable length_field_name;
     size_t modifier_count;
     struct Buffer *$nullable *$nullable modifiers;
@@ -187,6 +196,104 @@ static inline size_t primitive_type_size(enum TypeEncoding encoding)
     return 0;
 }
 
+static inline size_t primitive_type_alignment(enum TypeEncoding encoding)
+{
+    switch (encoding) {
+        case TypeEncoding_SIGNED_CHAR:
+        case TypeEncoding_UNSIGNED_CHAR:
+            return _Alignof(char);
+
+        case TypeEncoding_SIGNED_SHORT:
+        case TypeEncoding_UNSIGNED_SHORT:
+            return _Alignof(short);
+
+        case TypeEncoding_SIGNED_INT:
+        case TypeEncoding_UNSIGNED_INT:
+            return _Alignof(int);
+
+        case TypeEncoding_SIGNED_LONG:
+        case TypeEncoding_UNSIGNED_LONG:
+            return _Alignof(long);
+
+        case TypeEncoding_SIGNED_LONG_LONG:
+        case TypeEncoding_UNSIGNED_LONG_LONG:
+            return _Alignof(long long);
+
+        case TypeEncoding_FLOAT:
+            return _Alignof(float);
+
+        case TypeEncoding_DOUBLE:
+            return _Alignof(double);
+
+        case TypeEncoding_LONG_DOUBLE:
+            return _Alignof(long double);
+
+        case TypeEncoding_CHAR_POINTER:
+            return _Alignof(char *);
+
+        case TypeEncoding_POINTER:
+            return _Alignof(void *);
+
+        case TypeEncoding_BOOL:
+            return _Alignof(_Bool);
+
+        case TypeEncoding_VOID:
+            return 1;
+
+        default:
+            return 1;
+    }
+
+    return 1;
+}
+
+static inline size_t align_up_size(size_t value, size_t alignment)
+{
+    if (alignment <= 1) {
+        return value;
+    }
+    size_t rem = value % alignment;
+    if (rem == 0) {
+        return value;
+    }
+    return value + (alignment - rem);
+}
+
+static inline size_t type_alignment(struct Type type)
+{
+    switch (type.type) {
+        case TypeType_PRIMITIVE:
+            return primitive_type_alignment(type.primitive.type);
+
+        case TypeType_ARRAY:
+            return type_alignment(*type.array.type);
+
+        case TypeType_POINTER:
+            return _Alignof(void *);
+
+        case TypeType_UNION: {
+            size_t max_align = 1;
+            for (size_t i = 0; i < type.union_.field_count; i++) {
+                size_t align = type_alignment(type.union_.fields[i].type);
+                if (align > max_align)
+                    max_align = align;
+            }
+            return max_align;
+        }
+
+        case TypeType_STRUCT: {
+            size_t max_align = 1;
+            for (size_t i = 0; i < type.structure.field_count; i++) {
+                size_t align = type_alignment(type.structure.fields[i].type);
+                if (align > max_align)
+                    max_align = align;
+            }
+            return max_align;
+        }
+    }
+
+    return 1;
+}
 
 static inline size_t type_size(struct Type type)
 {
@@ -200,12 +307,31 @@ static inline size_t type_size(struct Type type)
         case TypeType_POINTER:
             return sizeof(void *);
 
+        case TypeType_UNION: {
+            size_t max_size = 0;
+            size_t max_align = 1;
+            for (size_t i = 0; i < type.union_.field_count; i++) {
+                size_t align = type_alignment(type.union_.fields[i].type);
+                if (align > max_align)
+                    max_align = align;
+                size_t size = type_size(type.union_.fields[i].type);
+                if (size > max_size)
+                    max_size = size;
+            }
+            return align_up_size(max_size, max_align);
+        }
+
         case TypeType_STRUCT: {
             size_t size = 0;
+            size_t max_align = 1;
             for (size_t i = 0; i < type.structure.field_count; i++) {
+                size_t align = type_alignment(type.structure.fields[i].type);
+                if (align > max_align)
+                    max_align = align;
+                size = align_up_size(size, align);
                 size += type_size(type.structure.fields[i].type);
             }
-            return size;
+            return align_up_size(size, max_align);
         }
     }
 
@@ -213,7 +339,6 @@ static inline size_t type_size(struct Type type)
 }
 
 int parse_type(struct Type *type, const char *$nonnull *$nonnull str);
-void free_type(struct Type *type);
 
 
 struct Value {
@@ -258,6 +383,7 @@ int value_to_json(FILE *buf, struct Value val);
 void print_type(FILE *to, struct Type type, int indent);
 const char *type_name(struct Type type);
 bool field_has_modifier(struct Field field, const char *modifier);
+int json_to_value(const char *json, size_t length, size_t expected_tokens, struct Value *$nullable out);
 
 $if_clang (
     _Pragma("clang assume_nonnull end")

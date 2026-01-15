@@ -1,0 +1,8 @@
+target("todo_app")
+    set_kind("binary")
+    add_files("src/main.c", "src/demo/todo_app.c")
+    add_cflags("-Wno-missing-braces")
+    add_cflags("-fblocks")
+    add_includedirs("src")
+    add_deps("clay_react")
+    add_links("BlocksRuntime")

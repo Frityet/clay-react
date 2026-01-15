@@ -5,32 +5,343 @@
 #include <clay.h>
 #include "clay_react/clay_react.h"
 
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// ============================================================================
-// TEST HARNESS
-// ============================================================================
+typedef void (*TestFn)(void);
 
-#define CHECK(cond) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-        return false; \
+typedef struct TestCase {
+    const char *name;
+    TestFn fn;
+    struct TestCase *next;
+} TestCase;
+
+static TestCase *g_test_head = NULL;
+static TestCase *g_test_tail = NULL;
+static void (*g_suite_setup)(void) = NULL;
+static void (*g_suite_teardown)(void) = NULL;
+static int g_current_failures = 0;
+static int g_current_assertions = 0;
+static int g_total_failures = 0;
+static int g_total_tests = 0;
+static int g_total_assertions = 0;
+static bool g_abort_enabled = false;
+static jmp_buf g_abort_jmp;
+
+static void test_register(TestCase *test) {
+    if (!test) return;
+    test->next = NULL;
+    if (!g_test_head) {
+        g_test_head = test;
+        g_test_tail = test;
+    } else {
+        g_test_tail->next = test;
+        g_test_tail = test;
+    }
+}
+
+static void test_record_assertion(void) {
+    g_current_assertions++;
+}
+
+static void test_record_failure(const char *file, int line, const char *kind, const char *expr) {
+    g_current_failures++;
+    fprintf(stderr, "  %s:%d: %s\n    %s\n", file, line, kind, expr);
+}
+
+static void test_abort(void) {
+    if (g_abort_enabled) {
+        longjmp(g_abort_jmp, 1);
+    }
+    abort();
+}
+
+#ifndef TEST_FLOAT_EPS
+#define TEST_FLOAT_EPS 1e-5
+#endif
+
+static bool test_eq_str(const char *a, const char *b) {
+    if (a == NULL || b == NULL) {
+        return a == b;
+    }
+    return strcmp(a, b) == 0;
+}
+
+static bool test_eq_signed(long long a, long long b) {
+    return a == b;
+}
+
+static bool test_eq_unsigned(unsigned long long a, unsigned long long b) {
+    return a == b;
+}
+
+static bool test_eq_fp(long double a, long double b) {
+    long double diff = a - b;
+    if (diff < 0) {
+        diff = -diff;
+    }
+    return diff <= (long double)TEST_FLOAT_EPS;
+}
+
+static bool test_eq_ptr(const void *a, const void *b) {
+    return a == b;
+}
+
+static void test_print_str(FILE *out, const char *value) {
+    if (value == NULL) {
+        fputs("(null)", out);
+        return;
+    }
+    fprintf(out, "\"%s\"", value);
+}
+
+static void test_print_int(FILE *out, long long value) {
+    fprintf(out, "%lld", value);
+}
+
+static void test_print_uint(FILE *out, unsigned long long value) {
+    fprintf(out, "%llu", value);
+}
+
+static void test_print_double(FILE *out, long double value) {
+    fprintf(out, "%Lg", value);
+}
+
+static void test_print_bool(FILE *out, bool value) {
+    fputs(value ? "true" : "false", out);
+}
+
+static void test_print_ptr(FILE *out, const void *value) {
+    fprintf(out, "%p", value);
+}
+
+#define TEST_CONCAT_INNER(a, b) a##b
+#define TEST_CONCAT(a, b) TEST_CONCAT_INNER(a, b)
+
+#define TEST_EQ(a, b) _Generic((a), \
+    char: test_eq_signed, \
+    signed char: test_eq_signed, \
+    short: test_eq_signed, \
+    int: test_eq_signed, \
+    long: test_eq_signed, \
+    long long: test_eq_signed, \
+    unsigned char: test_eq_unsigned, \
+    unsigned short: test_eq_unsigned, \
+    unsigned int: test_eq_unsigned, \
+    unsigned long: test_eq_unsigned, \
+    unsigned long long: test_eq_unsigned, \
+    float: test_eq_fp, \
+    double: test_eq_fp, \
+    long double: test_eq_fp, \
+    _Bool: test_eq_signed, \
+    char *: test_eq_str, \
+    const char *: test_eq_str, \
+    default: test_eq_ptr \
+)(a, b)
+
+#define TEST_PRINT_VALUE(out, value) _Generic((value), \
+    char: test_print_int, \
+    signed char: test_print_int, \
+    short: test_print_int, \
+    int: test_print_int, \
+    long: test_print_int, \
+    long long: test_print_int, \
+    unsigned char: test_print_uint, \
+    unsigned short: test_print_uint, \
+    unsigned int: test_print_uint, \
+    unsigned long: test_print_uint, \
+    unsigned long long: test_print_uint, \
+    float: test_print_double, \
+    double: test_print_double, \
+    long double: test_print_double, \
+    _Bool: test_print_bool, \
+    char *: test_print_str, \
+    const char *: test_print_str, \
+    default: test_print_ptr \
+)(out, value)
+
+#define TEST_LOG_VALUE(label, value) do { \
+    fprintf(stderr, "    %s: ", (label)); \
+    TEST_PRINT_VALUE(stderr, (value)); \
+    fputc('\n', stderr); \
+} while (0)
+
+#define TEST_CASE(case_fn) \
+    static void case_fn(void); \
+    static TestCase TEST_CONCAT(case_fn, _case) = { \
+        .name = #case_fn, \
+        .fn = case_fn, \
+        .next = NULL, \
+    }; \
+    static void TEST_CONCAT(case_fn, _register)(void) __attribute__((constructor)); \
+    static void TEST_CONCAT(case_fn, _register)(void) { test_register(&TEST_CONCAT(case_fn, _case)); } \
+    static void case_fn(void)
+
+#define TEST_SUITE_SETUP(name) \
+    static void name(void); \
+    static void TEST_CONCAT(name, _suite_setup_register)(void) __attribute__((constructor)); \
+    static void TEST_CONCAT(name, _suite_setup_register)(void) { g_suite_setup = name; } \
+    static void name(void)
+
+#define TEST_SUITE_TEARDOWN(name) \
+    static void name(void); \
+    static void TEST_CONCAT(name, _suite_teardown_register)(void) __attribute__((constructor)); \
+    static void TEST_CONCAT(name, _suite_teardown_register)(void) { g_suite_teardown = name; } \
+    static void name(void)
+
+#define EXPECT_TRUE(expr) do { \
+    test_record_assertion(); \
+    if (!(expr)) { \
+        test_record_failure(__FILE__, __LINE__, "EXPECT_TRUE", #expr); \
     } \
 } while (0)
 
-typedef bool (*TestFn)(void);
+#define EXPECT_FALSE(expr) do { \
+    test_record_assertion(); \
+    if ((expr)) { \
+        test_record_failure(__FILE__, __LINE__, "EXPECT_FALSE", #expr); \
+    } \
+} while (0)
 
-static bool run_test(const char *name, TestFn fn) {
-    fprintf(stdout, "[TEST] %s\n", name);
-    if (!fn()) {
-        fprintf(stdout, "[FAIL] %s\n", name);
-        return false;
+#define EXPECT_EQ(a, b) do { \
+    __auto_type _a = (a); \
+    __auto_type _b = (b); \
+    test_record_assertion(); \
+    if (!TEST_EQ(_a, _b)) { \
+        test_record_failure(__FILE__, __LINE__, "EXPECT_EQ", #a " == " #b); \
+        TEST_LOG_VALUE("left", _a); \
+        TEST_LOG_VALUE("right", _b); \
+    } \
+} while (0)
+
+#define EXPECT_NE(a, b) do { \
+    __auto_type _a = (a); \
+    __auto_type _b = (b); \
+    test_record_assertion(); \
+    if (TEST_EQ(_a, _b)) { \
+        test_record_failure(__FILE__, __LINE__, "EXPECT_NE", #a " != " #b); \
+        TEST_LOG_VALUE("left", _a); \
+        TEST_LOG_VALUE("right", _b); \
+    } \
+} while (0)
+
+#define EXPECT_STREQ(a, b) do { \
+    const char *_a = (a); \
+    const char *_b = (b); \
+    test_record_assertion(); \
+    if (!test_eq_str(_a, _b)) { \
+        test_record_failure(__FILE__, __LINE__, "EXPECT_STREQ", #a " == " #b); \
+        TEST_LOG_VALUE("left", _a); \
+        TEST_LOG_VALUE("right", _b); \
+    } \
+} while (0)
+
+#define ASSERT_TRUE(expr) do { \
+    test_record_assertion(); \
+    if (!(expr)) { \
+        test_record_failure(__FILE__, __LINE__, "ASSERT_TRUE", #expr); \
+        test_abort(); \
+    } \
+} while (0)
+
+#define ASSERT_EQ(a, b) do { \
+    __auto_type _a = (a); \
+    __auto_type _b = (b); \
+    test_record_assertion(); \
+    if (!TEST_EQ(_a, _b)) { \
+        test_record_failure(__FILE__, __LINE__, "ASSERT_EQ", #a " == " #b); \
+        TEST_LOG_VALUE("left", _a); \
+        TEST_LOG_VALUE("right", _b); \
+        test_abort(); \
+    } \
+} while (0)
+
+#define ASSERT_NOT_NULL(ptr) do { \
+    test_record_assertion(); \
+    if ((ptr) == NULL) { \
+        test_record_failure(__FILE__, __LINE__, "ASSERT_NOT_NULL", #ptr); \
+        test_abort(); \
+    } \
+} while (0)
+
+static TestCase *find_test(const char *name) {
+    if (!name) return NULL;
+    for (TestCase *test = g_test_head; test != NULL; test = test->next) {
+        if (strcmp(test->name, name) == 0) {
+            return test;
+        }
     }
-    fprintf(stdout, "[PASS] %s\n", name);
-    return true;
+    return NULL;
 }
+
+static void list_tests(void) {
+    for (TestCase *test = g_test_head; test != NULL; test = test->next) {
+        printf("%s\n", test->name);
+    }
+}
+
+static void run_test_case(TestCase *test) {
+    g_current_failures = 0;
+    g_current_assertions = 0;
+    if (setjmp(g_abort_jmp) == 0) {
+        g_abort_enabled = true;
+        test->fn();
+    }
+    g_abort_enabled = false;
+    g_total_assertions += g_current_assertions;
+    if (g_current_failures > 0) {
+        g_total_failures++;
+    }
+    g_total_tests++;
+}
+
+static int run_all_tests(const char *filter) {
+    g_total_failures = 0;
+    g_total_tests = 0;
+    g_total_assertions = 0;
+
+    if (filter) {
+        TestCase *test = find_test(filter);
+        if (!test) {
+            fprintf(stderr, "Unknown test: %s\n", filter);
+            return 1;
+        }
+        if (g_suite_setup) {
+            g_suite_setup();
+        }
+        run_test_case(test);
+        if (g_suite_teardown) {
+            g_suite_teardown();
+        }
+    } else {
+        if (g_suite_setup) {
+            g_suite_setup();
+        }
+        for (TestCase *test = g_test_head; test != NULL; test = test->next) {
+            run_test_case(test);
+        }
+        if (g_suite_teardown) {
+            g_suite_teardown();
+        }
+    }
+
+    if (g_total_failures > 0) {
+        fprintf(stderr, "Failed %d/%d test(s) with %d assertion(s)\n",
+            g_total_failures, g_total_tests, g_total_assertions);
+    }
+    return g_total_failures > 0 ? 1 : 0;
+}
+
+#define TEST_MAIN() \
+    int main(int argc, char **argv) { \
+        if (argc > 1 && strcmp(argv[1], "--list") == 0) { \
+            list_tests(); \
+            return 0; \
+        } \
+        return run_all_tests(argc > 1 ? argv[1] : NULL); \
+    }
 
 static Clay_Arena g_arena = {0};
 static bool g_clay_initialized = false;
@@ -86,7 +397,7 @@ $component(StateTestComponent) {
     g_state_render_count++;
 }
 
-static bool test_state_persistence(void) {
+TEST_CASE(test_state_persistence) {
     g_state_render_count = 0;
     g_state_last_value = -1;
     g_state_get = NULL;
@@ -96,23 +407,21 @@ static bool test_state_persistence(void) {
     StateTestComponent();
     cr_end_frame();
 
-    CHECK(g_state_render_count == 1);
-    CHECK(g_state_last_value == 0);
-    CHECK(g_state_get != NULL);
-    CHECK(g_state_set != NULL);
+    EXPECT_EQ(g_state_render_count, 1);
+    EXPECT_EQ(g_state_last_value, 0);
+    ASSERT_NOT_NULL(g_state_get);
+    ASSERT_NOT_NULL(g_state_set);
 
     g_state_set(5);
-    CHECK(cr_should_render());
+    EXPECT_TRUE(cr_should_render());
 
     cr_begin_frame();
     StateTestComponent();
     cr_end_frame();
 
-    CHECK(g_state_render_count == 2);
-    CHECK(g_state_last_value == 5);
-    CHECK(g_state_get() == 5);
-
-    return true;
+    EXPECT_EQ(g_state_render_count, 2);
+    EXPECT_EQ(g_state_last_value, 5);
+    EXPECT_EQ(g_state_get(), 5);
 }
 
 // ============================================================================
@@ -135,7 +444,7 @@ $component(EffectTestComponent) {
     }, $deps(count->get()));
 }
 
-static bool test_effects(void) {
+TEST_CASE(test_effects) {
     g_effect_runs = 0;
     g_effect_cleanups = 0;
     g_effect_seen = -1;
@@ -145,22 +454,21 @@ static bool test_effects(void) {
     EffectTestComponent();
     cr_end_frame();
 
-    CHECK(g_effect_runs == 1);
-    CHECK(g_effect_cleanups == 0);
-    CHECK(g_effect_seen == 0);
+    EXPECT_EQ(g_effect_runs, 1);
+    EXPECT_EQ(g_effect_cleanups, 0);
+    EXPECT_EQ(g_effect_seen, 0);
 
+    ASSERT_NOT_NULL(g_effect_set);
     g_effect_set(1);
-    CHECK(cr_should_render());
+    EXPECT_TRUE(cr_should_render());
 
     cr_begin_frame();
     EffectTestComponent();
     cr_end_frame();
 
-    CHECK(g_effect_runs == 2);
-    CHECK(g_effect_cleanups == 1);
-    CHECK(g_effect_seen == 1);
-
-    return true;
+    EXPECT_EQ(g_effect_runs, 2);
+    EXPECT_EQ(g_effect_cleanups, 1);
+    EXPECT_EQ(g_effect_seen, 1);
 }
 
 static int g_realloc_effect_runs = 0;
@@ -177,15 +485,14 @@ $component(EffectReallocComponent) {
     }
 }
 
-static bool test_effect_queue_realloc(void) {
+TEST_CASE(test_effect_queue_realloc) {
     g_realloc_effect_runs = 0;
 
     cr_begin_frame();
     EffectReallocComponent();
     cr_end_frame();
 
-    CHECK(g_realloc_effect_runs == 1);
-    return true;
+    EXPECT_EQ(g_realloc_effect_runs, 1);
 }
 
 // ============================================================================
@@ -208,7 +515,7 @@ $component(MemoTestComponent) {
     g_memo_value = memo;
 }
 
-static bool test_memo(void) {
+TEST_CASE(test_memo) {
     g_memo_runs = 0;
     g_memo_value = 0;
     g_memo_set = NULL;
@@ -217,26 +524,25 @@ static bool test_memo(void) {
     MemoTestComponent();
     cr_end_frame();
 
-    CHECK(g_memo_runs == 1);
-    CHECK(g_memo_value == 2);
+    EXPECT_EQ(g_memo_runs, 1);
+    EXPECT_EQ(g_memo_value, 2);
 
     cr_begin_frame();
     MemoTestComponent();
     cr_end_frame();
 
-    CHECK(g_memo_runs == 1);
-    CHECK(g_memo_value == 2);
+    EXPECT_EQ(g_memo_runs, 1);
+    EXPECT_EQ(g_memo_value, 2);
 
+    ASSERT_NOT_NULL(g_memo_set);
     g_memo_set(3);
 
     cr_begin_frame();
     MemoTestComponent();
     cr_end_frame();
 
-    CHECK(g_memo_runs == 2);
-    CHECK(g_memo_value == 6);
-
-    return true;
+    EXPECT_EQ(g_memo_runs, 2);
+    EXPECT_EQ(g_memo_value, 6);
 }
 
 // ============================================================================
@@ -261,7 +567,7 @@ $component(CallbackTestComponent) {
     g_cb_versioned = versioned;
 }
 
-static bool test_callback(void) {
+TEST_CASE(test_callback) {
     g_cb_render = 0;
     g_cb_seen = 0;
     g_cb_stable = NULL;
@@ -272,23 +578,21 @@ static bool test_callback(void) {
     CallbackTestComponent();
     cr_end_frame();
 
-    CHECK(g_cb_stable != NULL);
-    CHECK(g_cb_versioned != NULL);
+    ASSERT_NOT_NULL(g_cb_stable);
+    ASSERT_NOT_NULL(g_cb_versioned);
     g_cb_versioned();
-    CHECK(g_cb_seen == 1);
+    EXPECT_EQ(g_cb_seen, 1);
 
     cr_begin_frame();
     CallbackTestComponent();
     cr_end_frame();
 
-    CHECK(g_cb_stable_current == g_cb_stable);
+    EXPECT_TRUE(g_cb_stable_current == g_cb_stable);
     g_cb_versioned();
-    CHECK(g_cb_seen == 2);
+    EXPECT_EQ(g_cb_seen, 2);
 
     g_cb_stable();
-    CHECK(g_cb_seen == -1);
-
-    return true;
+    EXPECT_EQ(g_cb_seen, -1);
 }
 
 // ============================================================================
@@ -307,7 +611,7 @@ $component(RefTestComponent) {
     }
 }
 
-static bool test_ref(void) {
+TEST_CASE(test_ref) {
     g_ref_ptr = NULL;
     g_ref_value = 0;
 
@@ -315,16 +619,14 @@ static bool test_ref(void) {
     RefTestComponent();
     cr_end_frame();
 
-    CHECK(g_ref_ptr != NULL);
-    CHECK(g_ref_value == 10);
+    ASSERT_NOT_NULL(g_ref_ptr);
+    EXPECT_EQ(g_ref_value, 10);
 
     cr_begin_frame();
     RefTestComponent();
     cr_end_frame();
 
-    CHECK(g_ref_value == 42);
-
-    return true;
+    EXPECT_EQ(g_ref_value, 42);
 }
 
 // ============================================================================
@@ -342,7 +644,7 @@ $component(IdRoot) {
     IdComponentB();
 }
 
-static bool test_use_id(void) {
+TEST_CASE(test_use_id) {
     g_id_a = (CR_Id){0};
     g_id_b = (CR_Id){0};
 
@@ -353,18 +655,16 @@ static bool test_use_id(void) {
     CR_Id first_a = g_id_a;
     CR_Id first_b = g_id_b;
 
-    CHECK(first_a.name != NULL);
-    CHECK(first_b.name != NULL);
-    CHECK(!id_equal(first_a, first_b));
+    ASSERT_NOT_NULL(first_a.name);
+    ASSERT_NOT_NULL(first_b.name);
+    EXPECT_FALSE(id_equal(first_a, first_b));
 
     cr_begin_frame();
     IdRoot();
     cr_end_frame();
 
-    CHECK(id_equal(first_a, g_id_a));
-    CHECK(id_equal(first_b, g_id_b));
-
-    return true;
+    EXPECT_TRUE(id_equal(first_a, g_id_a));
+    EXPECT_TRUE(id_equal(first_b, g_id_b));
 }
 
 // ============================================================================
@@ -389,7 +689,7 @@ $component(TextInputTestComponent) {
     }
 }
 
-static bool test_text_input(void) {
+TEST_CASE(test_text_input) {
     g_input = NULL;
     g_input_len = 0;
     memset(g_input_buf, 0, sizeof(g_input_buf));
@@ -398,18 +698,16 @@ static bool test_text_input(void) {
     TextInputTestComponent();
     cr_end_frame();
 
-    CHECK(g_input != NULL);
-    CHECK(g_input_len == 2);
-    CHECK(strcmp(g_input_buf, "hi") == 0);
+    ASSERT_NOT_NULL(g_input);
+    EXPECT_EQ(g_input_len, (size_t)2);
+    EXPECT_STREQ(g_input_buf, "hi");
 
     cr_begin_frame();
     TextInputTestComponent();
     cr_end_frame();
 
-    CHECK(g_input_len == 2);
-    CHECK(strcmp(g_input_buf, "hi") == 0);
-
-    return true;
+    EXPECT_EQ(g_input_len, (size_t)2);
+    EXPECT_STREQ(g_input_buf, "hi");
 }
 
 // ============================================================================
@@ -430,19 +728,17 @@ $component(CaptureComponent, CaptureProps) {
     }, NULL);
 }
 
-static bool test_click_handler_props(void) {
+TEST_CASE(test_click_handler_props) {
     g_capture_value = 0;
 
     cr_begin_frame();
     CaptureComponent((CaptureProps){ .value = 42 });
     cr_end_frame();
 
-    CHECK(cr_runtime != NULL);
-    CHECK(cr_runtime->click_handler_count > 0);
+    ASSERT_NOT_NULL(cr_runtime);
+    ASSERT_TRUE(cr_runtime->click_handler_count > 0);
     cr_runtime->click_handlers[0].handler();
-    CHECK(g_capture_value == 42);
-
-    return true;
+    EXPECT_EQ(g_capture_value, 42);
 }
 
 // ============================================================================
@@ -481,7 +777,7 @@ $component(KeyedParent) {
     }
 }
 
-static bool test_keyed_components(void) {
+TEST_CASE(test_keyed_components) {
     g_key_values[0] = g_key_values[1] = 0;
     g_key_set_once[0] = g_key_set_once[1] = 0;
     g_key_swap = false;
@@ -495,10 +791,8 @@ static bool test_keyed_components(void) {
     KeyedParent();
     cr_end_frame();
 
-    CHECK(g_key_values[0] == 11);
-    CHECK(g_key_values[1] == 12);
-
-    return true;
+    EXPECT_EQ(g_key_values[0], 11);
+    EXPECT_EQ(g_key_values[1], 12);
 }
 
 // ============================================================================
@@ -524,7 +818,7 @@ $component(ContextParent) {
     }
 }
 
-static bool test_context(void) {
+TEST_CASE(test_context) {
     Theme default_theme = { .value = 13 };
     if (!g_theme_ctx) {
         g_theme_ctx = $create_context(Theme, &default_theme);
@@ -534,15 +828,13 @@ static bool test_context(void) {
     ContextChild();
     cr_end_frame();
 
-    CHECK(g_context_seen == 13);
+    EXPECT_EQ(g_context_seen, 13);
 
     cr_begin_frame();
     ContextParent();
     cr_end_frame();
 
-    CHECK(g_context_seen == 77);
-
-    return true;
+    EXPECT_EQ(g_context_seen, 77);
 }
 
 // ============================================================================
@@ -552,11 +844,12 @@ static bool test_context(void) {
 static int g_signal_value = 0;
 static int g_signal_notify_count = 0;
 
-static bool test_signal(void) {
+TEST_CASE(test_signal) {
     g_signal_value = 0;
     g_signal_notify_count = 0;
 
     auto sig = $signal(int, 1);
+    ASSERT_NOT_NULL(sig);
     sig->subscribe(^(int *value) {
         g_signal_value = *value;
         g_signal_notify_count++;
@@ -564,47 +857,23 @@ static bool test_signal(void) {
 
     sig->set(5);
 
-    CHECK(sig->get() == 5);
-    CHECK(g_signal_notify_count == 1);
-    CHECK(g_signal_value == 5);
-
-    return true;
+    EXPECT_EQ(sig->get(), 5);
+    EXPECT_EQ(g_signal_notify_count, 1);
+    EXPECT_EQ(g_signal_value, 5);
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
-
-int main(void) {
+TEST_SUITE_SETUP(clay_react_suite_setup) {
     init_clay_once();
     cr_init();
+}
 
-    int failed = 0;
-    failed += !run_test("state_persistence", test_state_persistence);
-    failed += !run_test("effects", test_effects);
-    failed += !run_test("effect_queue_realloc", test_effect_queue_realloc);
-    failed += !run_test("memo", test_memo);
-    failed += !run_test("callback", test_callback);
-    failed += !run_test("ref", test_ref);
-    failed += !run_test("use_id", test_use_id);
-    failed += !run_test("text_input", test_text_input);
-    failed += !run_test("click_handler_props", test_click_handler_props);
-    failed += !run_test("keyed_components", test_keyed_components);
-    failed += !run_test("context", test_context);
-    failed += !run_test("signal", test_signal);
-
+TEST_SUITE_TEARDOWN(clay_react_suite_teardown) {
     cr_shutdown();
     if (g_arena.memory) {
         free(g_arena.memory);
         g_arena.memory = NULL;
         g_arena.capacity = 0;
     }
-
-    if (failed == 0) {
-        fprintf(stdout, "All Clay React tests passed.\n");
-    } else {
-        fprintf(stdout, "%d Clay React tests failed.\n", failed);
-    }
-
-    return failed ? 1 : 0;
 }
+
+TEST_MAIN();

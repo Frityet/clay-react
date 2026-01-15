@@ -47,7 +47,11 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <iso646.h>
-#include "../reflect/reflect.h"
+#include "reflect.h"
+
+#pragma push_macro("NULL")
+#undef NULL
+#define NULL ((void *_Nullable)0)
 
 // ============================================================================
 // COMPILER ATTRIBUTES
@@ -59,9 +63,9 @@
 #define $always_inline __attribute__((always_inline)) inline
 #define $cleanup(fn) __attribute__((cleanup(fn)))
 #define $overload __attribute__((overloadable))
+#define $cast_nonnull(ptr) ((typeof(*ptr) *_Nonnull)(ptr))
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnullability-completeness"
+#pragma clang assume_nonnull begin
 
 #ifdef __cplusplus
 extern "C" {
@@ -195,26 +199,26 @@ typedef struct CR_TextInputState {
     bool focused;           // Is this input focused?
     bool editing;           // Is text being edited?
     uint32_t element_id;    // Associated element ID
-    OnTextChangeBlock on_change; // Callback when text changes
+    OnTextChangeBlock $nullable on_change; // Callback when text changes
 } CR_TextInputState;
 
 // Current focused input (only one at a time)
 extern CR_TextInputState * $nullable _cr_focused_input;
 
 // Text input management
-CR_TextInputState *_cr_alloc_text_input(size_t buffer_size);
-void _cr_text_input_set_text(CR_TextInputState *input, const char *text);
-void _cr_text_input_insert(CR_TextInputState *input, const char *text);
-void _cr_text_input_backspace(CR_TextInputState *input);
-void _cr_text_input_delete(CR_TextInputState *input);
-void _cr_text_input_move_cursor(CR_TextInputState *input, int delta);
-void _cr_focus_input(CR_TextInputState *input, uint32_t element_id);
+CR_TextInputState * $nullable _cr_alloc_text_input(size_t buffer_size);
+void _cr_text_input_set_text(CR_TextInputState * $nullable input, const char * $nullable text);
+void _cr_text_input_insert(CR_TextInputState * $nullable input, const char * $nullable text);
+void _cr_text_input_backspace(CR_TextInputState * $nullable input);
+void _cr_text_input_delete(CR_TextInputState * $nullable input);
+void _cr_text_input_move_cursor(CR_TextInputState * $nullable input, int delta);
+void _cr_focus_input(CR_TextInputState * $nullable input, uint32_t element_id);
 void _cr_unfocus_input(void);
-void _cr_handle_text_event(const char *text);
+void _cr_handle_text_event(const char * $nullable text);
 void _cr_handle_key_event(int keycode, bool is_press);
 
 // Frame-scoped string allocation (used by formatted text helpers)
-char *_cr_temp_string_alloc(size_t size);
+char * $nullable _cr_temp_string_alloc(size_t size);
 
 // ============================================================================
 // CORE COMPONENT TYPES
@@ -310,8 +314,8 @@ struct CR_Runtime {
     // Event handler registry
     struct {
         uint32_t element_id;
-        VoidBlock handler;
-    } *click_handlers;
+        VoidBlock $nullable handler;
+    } * $nullable click_handlers;
     size_t click_handler_count;
     size_t click_handler_capacity;
 
@@ -320,25 +324,25 @@ struct CR_Runtime {
     size_t peak_allocated;
 
     // Frame-scoped text buffers
-    CR_TempString *temp_strings;
+    CR_TempString * $nullable temp_strings;
     size_t temp_string_count;
     size_t temp_string_capacity;
 
     // Component registry
-    CR_Component **components;
+    CR_Component * $nullable * $nullable components;
     size_t component_count;
     size_t component_capacity;
 
     // Component stack (for nested renders)
-    CR_Component **component_stack;
+    CR_Component * $nullable * $nullable component_stack;
     size_t component_stack_count;
     size_t component_stack_capacity;
 
     // Effect queues
-    CR_EffectRef *pending_effects;
+    CR_EffectRef * $nullable pending_effects;
     size_t pending_effect_count;
     size_t pending_effect_capacity;
-    CR_EffectRef *pending_layout_effects;
+    CR_EffectRef * $nullable pending_layout_effects;
     size_t pending_layout_effect_count;
     size_t pending_layout_effect_capacity;
 
@@ -389,7 +393,7 @@ typedef enum {
 } CR_HookType;
 
 typedef struct {
-    void *data;
+    void * $nullable data;
     size_t size;
 } CR_DepSnapshot;
 
@@ -406,40 +410,40 @@ typedef enum {
 
 typedef struct {
     CR_DepMode mode;
-    const CR_Dep *items;
+    const CR_Dep * $nullable items;
     size_t count;
 } CR_DepList;
 
 typedef struct CR_EffectInternal {
-    EffectBlock effect;
+    EffectBlock $nullable effect;
     CleanupBlock $nullable cleanup;
 } CR_EffectInternal;
 
 struct CR_Hook {
     int type;
     bool deps_initialized;
-    CR_DepSnapshot *deps;
+    CR_DepSnapshot *$nullable deps;
     size_t dep_count;
     union {
         struct {
-            CR_StateInternal *state;
-            void *handle;
+            CR_StateInternal * $nullable state;
+            void * $nullable handle;
             size_t handle_size;
         } state;
         struct {
-            void *ptr;
+            void * $nullable ptr;
             size_t size;
         } ref;
         struct {
-            CR_TextInputState *state;
+            CR_TextInputState * $nullable state;
         } text_input;
         struct {
-            void *value;
+            void * $nullable value;
             size_t size;
             bool initialized;
         } memo;
         struct {
-            void *block;
+            void * $nullable block;
         } callback;
         struct {
             CR_EffectInternal effect;
@@ -450,22 +454,23 @@ struct CR_Hook {
             bool initialized;
         } uid;
         struct {
-            CR_SignalInternal *signal;
-            void *handle;
+            CR_SignalInternal * $nullable signal;
+            void * $nullable handle;
             size_t handle_size;
         } signal;
     };
 };
 
-CR_StateInternal *_cr_alloc_state(size_t size, void *initial);
-void *_cr_state_get(CR_StateInternal *state);
-void _cr_state_set(CR_StateInternal *state, void *value);
-CR_Hook *_cr_use_hook(int type);
-bool _cr_deps_should_run(CR_Hook *hook, CR_DepList deps);
-void _cr_deps_store(CR_Hook *hook, CR_DepList deps);
+CR_StateInternal * $nullable _cr_alloc_state(size_t size, void *initial);
+void * $nullable _cr_state_get(CR_StateInternal * $nullable state);
+void _cr_state_set(CR_StateInternal * $nullable state, void * $nullable value);
+bool _cr_state_set_if_changed(CR_StateInternal * $nullable state, void * $nullable value);
+CR_Hook * $nullable _cr_use_hook(int type);
+bool _cr_deps_should_run(CR_Hook * $nullable hook, CR_DepList deps);
+void _cr_deps_store(CR_Hook * $nullable hook, CR_DepList deps);
 void _cr_schedule_render(void);
 uint32_t _cr_next_uid(void);
-void _cr_use_effect_impl(EffectBlock effect, CR_DepList deps, bool is_layout);
+void _cr_use_effect_impl(EffectBlock $nullable effect, CR_DepList deps, bool is_layout);
 
 #define $dep(value) \
     ((CR_Dep){ .ptr = &(typeof(value)){ (value) }, .size = sizeof(value) })
@@ -529,8 +534,9 @@ void _cr_use_effect_impl(EffectBlock effect, CR_DepList deps, bool is_layout);
                 _handle->_state = _state; \
                 _handle->get = Block_copy(^T{ return *(T *)_state->value; }); \
                 _handle->set = Block_copy(^(T value){ \
-                    _cr_state_set(_state, &value); \
-                    _cr_schedule_render(); \
+                    if (_cr_state_set_if_changed(_state, &value)) { \
+                        _cr_schedule_render(); \
+                    } \
                 }); \
             } \
             _result = _hook->state.handle; \
@@ -549,7 +555,22 @@ void _cr_use_effect_impl(EffectBlock effect, CR_DepList deps, bool is_layout);
  *   auto ref = $use_ref(int, 0);
  *   *ref = 42;  // Doesn't trigger re-render
  */
-#define $use_ref(T, ...) \
+#define _CR_USE_REF_1(...) \
+    ({ \
+        typedef typeof(__VA_ARGS__) T; \
+        T *_result = NULL; \
+        CR_Hook *_hook = _cr_use_hook(CR_HOOK_REF); \
+        if (_hook) { \
+            if (!_hook->ref.ptr) { \
+                _hook->ref.size = sizeof(T); \
+                _hook->ref.ptr = _cr_alloc(sizeof(T)); \
+                *(T *)_hook->ref.ptr = (T){ __VA_ARGS__ }; \
+            } \
+            _result = (T *)_hook->ref.ptr; \
+        } \
+        _result; \
+    })
+#define _CR_USE_REF_2(T, ...) \
     ({ \
         T *_result = NULL; \
         CR_Hook *_hook = _cr_use_hook(CR_HOOK_REF); \
@@ -563,6 +584,8 @@ void _cr_use_effect_impl(EffectBlock effect, CR_DepList deps, bool is_layout);
         } \
         _result; \
     })
+#define $use_ref(...) \
+    _CR_GET_MACRO(__VA_ARGS__, _CR_USE_REF_2, _CR_USE_REF_1)(__VA_ARGS__)
 
 // ============================================================================
 // EFFECT IMPLEMENTATION
@@ -603,9 +626,7 @@ void _cr_run_effect(CR_EffectInternal *effect);
  * Usage:
  *   auto result = $use_memo(int, ^{ return expensive_calc(); }, $deps(dep1, dep2));
  */
-#define _CR_USE_MEMO_2(T, compute_block) \
-    _CR_USE_MEMO_3(T, compute_block, $deps_none())
-#define _CR_USE_MEMO_3(T, compute_block, deps) \
+#define _CR_USE_MEMO_IMPL(T, compute_block, deps) \
     ({ \
         T _result = (T){0}; \
         CR_Hook *_hook = _cr_use_hook(CR_HOOK_MEMO); \
@@ -626,8 +647,14 @@ void _cr_run_effect(CR_EffectInternal *effect);
         } \
         _result; \
     })
+#define _CR_USE_MEMO_1(compute_block) \
+    _CR_USE_MEMO_2(compute_block, $deps_none())
+#define _CR_USE_MEMO_2(compute_block, deps) \
+    _CR_USE_MEMO_IMPL(typeof(compute_block()), compute_block, deps)
+#define _CR_USE_MEMO_3(T, compute_block, deps) \
+    _CR_USE_MEMO_IMPL(T, compute_block, deps)
 #define $use_memo(...) \
-    _CR_GET_MACRO_3(__VA_ARGS__, _CR_USE_MEMO_3, _CR_USE_MEMO_2)(__VA_ARGS__)
+    _CR_GET_MACRO_3(__VA_ARGS__, _CR_USE_MEMO_3, _CR_USE_MEMO_2, _CR_USE_MEMO_1)(__VA_ARGS__)
 
 // ============================================================================
 // CALLBACK IMPLEMENTATION
@@ -696,12 +723,13 @@ typedef struct CR_SignalInternal {
     uint64_t version;
     struct {
         SubscriberBlock handler;
-    } *subscribers;
+    } * $nullable subscribers;
     size_t subscriber_count;
 } CR_SignalInternal;
 
-CR_SignalInternal *_cr_alloc_signal(size_t size, void *initial, struct Type type);
-void _cr_signal_notify(CR_SignalInternal *signal);
+CR_SignalInternal * $nullable _cr_alloc_signal(size_t size, void *initial, struct Type type);
+void _cr_signal_notify(CR_SignalInternal * $nullable signal);
+bool _cr_signal_set_if_changed(CR_SignalInternal * $nullable signal, void * $nullable value);
 
 /**
  * $signal - Create a reactive signal
@@ -723,10 +751,9 @@ void _cr_signal_notify(CR_SignalInternal *signal);
         if (!_init) { \
             _handle.get = Block_copy(^T{ return *(T *)_sig->value; }); \
             _handle.set = Block_copy(^(T v){ \
-                *(T *)_sig->value = v; \
-                _sig->version++; \
-                _cr_signal_notify(_sig); \
-                _cr_schedule_render(); \
+                if (_cr_signal_set_if_changed(_sig, &v)) { \
+                    _cr_schedule_render(); \
+                } \
             }); \
             _handle.subscribe = Block_copy(^(void (^h)(T *value)){ \
                 _sig->subscriber_count++; \
@@ -744,7 +771,7 @@ void _cr_signal_notify(CR_SignalInternal *signal);
 // EVENT HANDLING
 // ============================================================================
 
-void _cr_register_click(uint32_t element_id, VoidBlock handler);
+void _cr_register_click(uint32_t element_id, VoidBlock $nullable handler);
 void _cr_dispatch_clicks(void);
 void _cr_clear_handlers(void);
 
@@ -876,7 +903,7 @@ typedef struct {
 // CORE COMPONENT FUNCTIONS
 // ============================================================================
 
-static $always_inline Clay_String cr_string(const char *text) {
+static $always_inline Clay_String cr_string(const char * $nullable text) {
     if (!text) return CLAY_STRING("");
     return (Clay_String){
         .isStaticallyAllocated = false,
@@ -954,7 +981,7 @@ static $always_inline void _cr_apply_view_style(Clay_ElementDeclaration *decl, V
 /**
  * Box - Generic container
  */
-static $always_inline void Box(BoxParams params, VoidBlock children) {
+static $always_inline void Box(BoxParams params, VoidBlock $nullable children) {
     Clay_ElementId eid = cr_element_id(params.id);
     if (params.on_click && eid.id != 0) {
         _cr_register_click(eid.id, Block_copy(params.on_click));
@@ -993,7 +1020,7 @@ static $always_inline void Box(BoxParams params, VoidBlock children) {
 /**
  * Row - Horizontal layout container
  */
-static $always_inline void Row(BoxParams params, VoidBlock children) {
+static $always_inline void Row(BoxParams params, VoidBlock $nullable children) {
     params.style.layout.layoutDirection = CLAY_LEFT_TO_RIGHT;
     Box(params, children);
 }
@@ -1001,7 +1028,7 @@ static $always_inline void Row(BoxParams params, VoidBlock children) {
 /**
  * Column - Vertical layout container
  */
-static $always_inline void Column(BoxParams params, VoidBlock children) {
+static $always_inline void Column(BoxParams params, VoidBlock $nullable children) {
     params.style.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
     Box(params, children);
 }
@@ -1009,7 +1036,7 @@ static $always_inline void Column(BoxParams params, VoidBlock children) {
 /**
  * Center - Centered content container
  */
-static $always_inline void Center(BoxParams params, VoidBlock children) {
+static $always_inline void Center(BoxParams params, VoidBlock $nullable children) {
     params.style.layout.childAlignment = (Clay_ChildAlignment){
         .x = CLAY_ALIGN_X_CENTER,
         .y = CLAY_ALIGN_Y_CENTER,
@@ -1053,7 +1080,7 @@ static $always_inline void VSpacer(void) {
 /**
  * Flex - Flexible container that takes available space
  */
-static $always_inline void Flex(BoxParams params, VoidBlock children) {
+static $always_inline void Flex(BoxParams params, VoidBlock $nullable children) {
     params.style.layout.sizing.width = CLAY_SIZING_GROW(0);
     Box(params, children);
 }
@@ -1061,7 +1088,7 @@ static $always_inline void Flex(BoxParams params, VoidBlock children) {
 /**
  * Card - Styled card container
  */
-static $always_inline void Card(BoxParams params, VoidBlock children) {
+static $always_inline void Card(BoxParams params, VoidBlock $nullable children) {
     if (_cr_layout_is_zero(params.style.layout)) {
         params.style.layout.padding = $pad(16);
     }
@@ -1087,7 +1114,7 @@ static $always_inline void Text(TextParams params) {
 /**
  * Textf - Render formatted text
  */
-static $always_inline void Textf(TextParams params, const char *fmt, ...) {
+static $always_inline void Textf(TextParams params, const char * $nullable fmt, ...) {
     if (!fmt) {
         Text(params);
         return;
@@ -1114,14 +1141,14 @@ static $always_inline void Textf(TextParams params, const char *fmt, ...) {
 /**
  * Clickable - Generic clickable container
  */
-static $always_inline void Clickable(ClickableParams params, VoidBlock children) {
+static $always_inline void Clickable(ClickableParams params, VoidBlock $nullable children) {
     Box(params, children);
 }
 
 /**
  * Button - Button with label and click handler
  */
-static $always_inline void Button(ButtonParams params, VoidBlock children) {
+static $always_inline void Button(ButtonParams params, VoidBlock $nullable children) {
     ViewStyle style = params.style;
     if (_cr_layout_is_zero(style.layout)) {
         style.layout = (Clay_LayoutConfig){
@@ -1167,7 +1194,7 @@ static $always_inline void Button(ButtonParams params, VoidBlock children) {
 /**
  * IconButton - Compact icon button
  */
-static $always_inline void IconButton(IconButtonParams params, VoidBlock children) {
+static $always_inline void IconButton(IconButtonParams params, VoidBlock $nullable children) {
     ViewStyle style = params.style;
     if (_cr_layout_is_zero(style.layout)) {
         style.layout = (Clay_LayoutConfig){
@@ -1338,14 +1365,14 @@ static $always_inline void TextInput(TextInputParams params) {
 struct CR_Context {
     uint64_t id;
     const char *name;
-    void *default_value;
+    void * $nullable default_value;
     size_t value_size;
     struct Type type;
 };
 
 struct CR_ContextProvider {
     CR_Context *context;
-    void *value;
+    void * $nullable value;
     CR_ContextProvider * $nullable parent;
 };
 
@@ -1359,7 +1386,7 @@ struct CR_ContextProvider {
 #define $create_context(T, ...) \
     _cr_create_context_impl(#T, sizeof(T), __VA_ARGS__, $reflect(T))
 
-CR_Context *_cr_create_context_impl(const char *name, size_t size, void *default_value, struct Type type);
+CR_Context * $nullable _cr_create_context_impl(const char *name, size_t size, void * $nullable default_value, struct Type type);
 
 /**
  * $provide - Provide context value to children
@@ -1374,8 +1401,8 @@ CR_Context *_cr_create_context_impl(const char *name, size_t size, void *default
          _done == NULL; \
          _cr_pop_context(_prov), _done = (void *)1)
 
-CR_ContextProvider *_cr_push_context(CR_Context *context, void *value);
-void _cr_pop_context(CR_ContextProvider *provider);
+CR_ContextProvider * $nullable _cr_push_context(CR_Context *context, void * $nullable value);
+void _cr_pop_context(CR_ContextProvider * $nullable provider);
 
 /**
  * $use_context - Access context value
@@ -1386,7 +1413,7 @@ void _cr_pop_context(CR_ContextProvider *provider);
 #define $use_context(context) \
     _cr_use_context_impl(context)
 
-void *_cr_use_context_impl(CR_Context *context);
+void * $nullable _cr_use_context_impl(CR_Context * $nullable context);
 
 // ============================================================================
 // COMPONENT DEFINITION
@@ -1475,16 +1502,16 @@ void *_cr_use_context_impl(CR_Context *context);
 // ANIMATION HELPERS
 // ============================================================================
 
-static $always_inline float $lerp(float a, float b, float t) {
+static $always_inline float lerp(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
-static $always_inline Clay_Color $lerp_color(Clay_Color a, Clay_Color b, float t) {
+static $always_inline Clay_Color lerp_colour(Clay_Color a, Clay_Color b, float t) {
     return (Clay_Color){
-        .r = $lerp(a.r, b.r, t),
-        .g = $lerp(a.g, b.g, t),
-        .b = $lerp(a.b, b.b, t),
-        .a = $lerp(a.a, b.a, t),
+        .r = lerp(a.r, b.r, t),
+        .g = lerp(a.g, b.g, t),
+        .b = lerp(a.b, b.b, t),
+        .a = lerp(a.a, b.a, t),
     };
 }
 
@@ -1493,13 +1520,13 @@ static $always_inline Clay_Color $lerp_color(Clay_Color a, Clay_Color b, float t
 // ============================================================================
 
 // Memory allocation with tracking
-void *_cr_alloc(size_t size);
-void _cr_free(void *ptr, size_t size);
+void * $nullable _cr_alloc(size_t size);
+void _cr_free(void * $nullable ptr, size_t size);
 
 // Component lifecycle (used by $component wrappers)
-void _cr_component_begin(const char *name, const void *props, size_t props_size);
+void _cr_component_begin(const char *name, const void * $nullable props, size_t props_size);
 void _cr_component_end(void);
-void *_cr_current_props(void);
+void * $nullable _cr_current_props(void);
 void cr_key(CR_Id key);
 
 // Debug
@@ -1510,4 +1537,5 @@ void cr_debug_log_tree(void);
 }
 #endif
 
-#pragma clang diagnostic pop
+#pragma clang assume_nonnull end
+#pragma pop_macro("NULL")

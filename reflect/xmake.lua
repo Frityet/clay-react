@@ -1,0 +1,5 @@
+target("reflect")
+    set_kind("static")
+    add_files("src/*.c")
+    add_packages("jsmn")
+    add_includedirs("src", {public = true})

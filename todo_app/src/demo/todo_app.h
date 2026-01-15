@@ -20,4 +20,5 @@ typedef struct {
 } TodoTheme;
 
 const TodoTheme *TodoAppTheme(void);
+void TodoAppSetViewport(Clay_Dimensions dimensions);
 void TodoApp(void);
