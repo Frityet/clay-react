@@ -108,7 +108,7 @@ local clay_react_test_cases = {
     "test_signal",
 }
 
-includes("reflect", "clay_react", "todo_app")
+includes("reflect", "clay_react", "clay-react++", "todo_app", "todo-app++")
 
 -- Reflect tests
 target("reflect_tests")

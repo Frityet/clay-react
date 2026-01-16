@@ -691,7 +691,7 @@ static int run_xcb_cairo(void) {
         fprintf(stderr, "Failed to init xcb key symbols; text input disabled\n");
     }
 
-    const char *fonts[] = { "Sans" };
+    char *fonts[] = { strdup("Sans") };
 
     uint64_t memory_size = Clay_MinMemorySize();
     Clay_Arena arena = {

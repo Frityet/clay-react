@@ -1,0 +1,5 @@
+target("todo-app++")
+    set_kind("binary")
+    set_languages("cxx23")
+    add_files("src/main.cpp")
+    add_deps("clay-react++")

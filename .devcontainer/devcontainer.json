@@ -23,23 +23,13 @@
 		"./xmake": {}
 	},
   "runArgs": [
-	"--net=host",
+    "--network=host",
     "--userns=keep-id",
-    "--security-opt=label=disable",
-
-    // X11 Forwarding
-    "-e", "DISPLAY=${localEnv:DISPLAY}",
-    "-e", "XAUTHORITY=/tmp/.Xauthority",
-    
-    "-v", "${localEnv:HOME}/.Xauthority:/tmp/.Xauthority:ro",
-    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw"
-    // Wayland
-    // "-e", "WAYLAND_DISPLAY=${localEnv:WAYLAND_DISPLAY}",
-    // "-v", "${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY}:/tmp/${localEnv:WAYLAND_DISPLAY}:rw",
-    // "-e", "XDG_RUNTIME_DIR=/tmp"
+    "-v", "${env:HOME}/.Xauthority:/tmp/.Xauthority:ro,Z"
   ],
   "containerEnv": {
-    "QT_X11_NO_MITSHM": "1"
+    "DISPLAY": "${env:DISPLAY}",
+    "XAUTHORITY": "/tmp/.Xauthority"
   },
 "postCreateCommand": "sudo apt-get update && sudo apt-get install -y x11-apps",
 "customizations": {
